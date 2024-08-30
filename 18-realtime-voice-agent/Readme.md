@@ -4,6 +4,7 @@
 - Create an account on [Daily](https://dashboard.daily.co/u/signup)
     - You can then go to the “developers” tab to fetch your API key - add this to your Cerebrium Secrets.
 - git clone git@github.com:facundo-zalazar/examples.git
+    - git checkout example_18_testing -f
     - go to /examples/18-realtime-voice-agent
     - pip install --upgrade cerebrium
     - cerebrium login
@@ -22,7 +23,7 @@
         - VITE_USER_VIDEO= #Does the app require the user's webcam?
         - VITE_SHOW_SPLASH=1 # Show a splash page with marketing info
         - VITE_SHOW_CONFIG= # Show demo config options first
-        - VITE_SERVER_URL=https://api.cortex.cerebrium.ai/v4/p-76b6765f/18-realtime-agent (YOUR DEPLOYED APP LINK IS HERE)
+        - VITE_SERVER_URL=https://api.cortex.cerebrium.ai/v4/1234567/18-realtime-agent (YOUR DEPLOYED APP LINK IS HERE)
         - VITE_SERVER_AUTH=eyJhbGciO... (TAKE THIS FROM THE API KEYS SECTION ON CEREBRIUM SIDEBAR)
     - mv env.example .env.development.local
     - yarn 
