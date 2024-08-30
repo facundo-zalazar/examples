@@ -23,7 +23,7 @@
         - VITE_USER_VIDEO= #Does the app require the user's webcam?
         - VITE_SHOW_SPLASH=1 # Show a splash page with marketing info
         - VITE_SHOW_CONFIG= # Show demo config options first
-        - VITE_SERVER_URL=https://api.cortex.cerebrium.ai/v4/1234567/18-realtime-agent (YOUR DEPLOYED APP LINK IS HERE)
+        - VITE_SERVER_URL= #Leave empty
         - VITE_SERVER_AUTH=eyJhbGciO... (TAKE THIS FROM THE API KEYS SECTION ON CEREBRIUM SIDEBAR)
     - mv env.example .env.development.local
     - yarn 
