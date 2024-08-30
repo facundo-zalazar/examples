@@ -10,25 +10,31 @@ import requests
 from cerebrium import get_secret
 from huggingface_hub import login
 from loguru import logger
-from pipecat.frames.frames import LLMMessagesFrame, EndFrame
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame, Frame, TextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import (
     LLMAssistantResponseAggregator,
     LLMUserResponseAggregator,
+    LLMFullResponseAggregator
 )
+from pipecat.services.azure import AzureTTSService
 from pipecat.services.deepgram import DeepgramSTTService
 from pipecat.services.openai import OpenAILLMService
-from pipecat.transports.services.daily import DailyParams, DailyTransport
+from pipecat.transports.services.daily import DailyParams, DailyTranscriptionSettings, DailyTransport, DailyTransportMessageFrame
 from pipecat.vad.silero import SileroVADAnalyzer
 from pipecat.vad.vad_analyzer import VADParams
-
+from pipecat.processors.aggregators.sentence import SentenceAggregator
 from helpers import (
     ClearableDeepgramTTSService,
     AudioVolumeTimer,
     TranscriptionTimingLogger,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
@@ -41,12 +47,15 @@ deepgram_voice: str = "aura-asteria-en"
 
 login(token=get_secret("HF_TOKEN"))
 
+import os
+
+os.system("rm -rf ~/.cache/huggingface/hub")
 
 # Run vllM Server in background process
 def start_server():
     while True:
         process = subprocess.Popen(
-            f"python -m vllm.entrypoints.openai.api_server --port 5000 --model NousResearch/Meta-Llama-3-8B-Instruct --dtype bfloat16 --api-key {get_secret('HF_TOKEN')}",
+            f"python -m vllm.entrypoints.openai.api_server --port 5000 --model meta-llama/Meta-Llama-3-8B-Instruct --dtype bfloat16 --api-key {get_secret('HF_TOKEN')}",
             shell=True,
         )
         process.wait()  # Wait for the process to complete
@@ -59,15 +68,63 @@ server_process = Process(target=start_server, daemon=True)
 server_process.start()
 
 
+# We need to use a custom service here to yield LLM frames without saving
+# any context
+class TranslationProcessor(FrameProcessor):
+
+    def __init__(self, language):
+        super().__init__()
+        self._language = language
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TextFrame):
+            context = [
+                {
+                    "role": "system",
+                    "content": f"You will be provided with a sentence in English, and your task is to translate it into {self._language}.",
+                },
+                {"role": "user", "content": frame.text},
+            ]
+            await self.push_frame(LLMMessagesFrame(context))
+        else:
+            await self.push_frame(frame)
+
+
+class TranslationSubtitles(FrameProcessor):
+    def __init__(self, language):
+        super().__init__()
+        self._language = language
+
+    #
+    # This doesn't do anything unless the receiver recognizes the message being
+    # sent. For example, in this case, we are sending a message to the transport
+    # so an application running at the other end of the transport could display
+    # subtitles.
+    #
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TextFrame):
+            message = {
+                "language": self._language,
+                "text": frame.text
+            }
+            await self.push_frame(DailyTransportMessageFrame(message))
+
+        await self.push_frame(frame)
+
 async def main(room_url: str, token: str):
     async with aiohttp.ClientSession() as session:
         transport = DailyTransport(
             room_url,
             token,
-            "Respond bot",
+            "Translator",
             DailyParams(
                 audio_out_enabled=True,
-                transcription_enabled=False,
+                transcription_enabled=True,
+                transcription_settings=DailyTranscriptionSettings(extra={"interim_results": False}),
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
                 vad_audio_passthrough=True,
@@ -86,10 +143,17 @@ async def main(room_url: str, token: str):
             base_url="http://127.0.0.1:8082/v1/speak",
         )
 
+        # tts = AzureTTSService(
+        #     api_key=os.getenv("AZURE_SPEECH_API_KEY"),
+        #     region=os.getenv("AZURE_SPEECH_REGION"),
+        #     voice="es-ES-AlvaroNeural",
+        # )
+
+
         llm = OpenAILLMService(
             name="LLM",
             api_key=get_secret("HF_TOKEN"),
-            model="NousResearch/Meta-Llama-3-8B-Instruct",
+            model="meta-llama/Meta-Llama-3-8B-Instruct",
             base_url="http://127.0.0.1:5000/v1",
         )
 
@@ -106,14 +170,24 @@ async def main(room_url: str, token: str):
         tma_in = LLMUserResponseAggregator(messages)
         tma_out = LLMAssistantResponseAggregator(messages)
 
+        sa = SentenceAggregator()
+        tp = TranslationProcessor("Spanish")
+        ts = TranslationSubtitles("spanish")
+
+        lfra = LLMFullResponseAggregator()
+
         pipeline = Pipeline(
             [
                 transport.input(),  # Transport user input
+                sa,
                 avt,  # Audio volume timer
                 stt,  # Speech-to-text
                 tl,  # Transcription timing logger
                 tma_in,  # User responses
+                tp,
                 llm,  # LLM
+                lfra,
+                ts,
                 tts,  # TTS
                 transport.output(),  # Transport bot output
                 tma_out,  # Assistant spoken responses
@@ -140,6 +214,7 @@ async def main(room_url: str, token: str):
                     "content": "Introduce yourself by saying 'hello, I'm FastBot, how can I help you today?'",
                 }
             )
+            transport.capture_participant_transcription(participant["id"])
             await task.queue_frame(LLMMessagesFrame(messages))
 
         # When the participant leaves, we exit the bot.
@@ -162,7 +237,7 @@ async def main(room_url: str, token: str):
 async def check_deepgram_model_status():
     url = "http://127.0.0.1:8082/v1/status/engine"
     headers = {"Content-Type": "application/json"}
-    max_retries = 5
+    max_retries = 20
     async with aiohttp.ClientSession() as session:
         for _ in range(max_retries):
             print("Trying Deepgram local server")
@@ -187,13 +262,13 @@ async def check_vllm_model_status():
         "Authorization": f"Bearer {get_secret('HF_TOKEN')}",
     }
     data = {
-        "model": "NousResearch/Meta-Llama-3-8B-Instruct",
+        "model": "meta-llama/Meta-Llama-3-8B-Instruct",
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello, are you working?"},
         ],
     }
-    max_retries = 5
+    max_retries = 20
     async with aiohttp.ClientSession() as session:
         for _ in range(max_retries):
             print("Trying vLLM local server")
@@ -208,7 +283,7 @@ async def check_vllm_model_status():
                         print(f"Response: {response_text}")
             except aiohttp.ClientConnectionError:
                 print("vLLM Connection refused, retrying...")
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
     print("Failed to connect to vLLM server after multiple attempts")
     return False
 
@@ -234,7 +309,7 @@ def create_room():
     }
     data = {
         "properties": {
-            "exp": int(time.time()) + 60 * 5,  ##5 mins
+            "exp": int(time.time()) + 60 * 15,  ##5 mins
             "eject_at_room_exp": True,
         }
     }

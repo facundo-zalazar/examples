@@ -3,7 +3,7 @@
 # If you would like to learn more about your Cerebrium config, please visit https://docs.cerebrium.ai/cerebrium/environments/config-files#config-file-example
 
 [cerebrium.deployment]
-name = "18-realtime-agent"
+name = "realtime-agent"
 python_version = "3.11"
 include = "[./*, main.py, cerebrium.toml]"
 exclude = "[./example_exclude]"
@@ -24,13 +24,14 @@ cooldown = 180
 
 [cerebrium.dependencies.pip]
 torch = ">=2.0.0"
-"pipecat-ai[silero, daily, openai, deepgram]" = "==0.0.39"
+"pipecat-ai[silero, daily, openai, deepgram, azure]" = "==0.0.39"
 aiohttp = ">=3.9.4"
 torchaudio = ">=2.3.0"
 channels = ">=4.0.0"
 requests = "==2.32.2"
 vllm = "latest"
 huggingface_hub = "latest"
+python-dotenv = "latest"
 
 [cerebrium.dependencies.conda]
 
